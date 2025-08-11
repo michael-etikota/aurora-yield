@@ -307,3 +307,70 @@
     )
   )
 )
+
+;; Remove liquidity and claim rewards
+(define-public (remove-liquidity (lp-tokens uint))
+  (let (
+      (provider-data (unwrap! (map-get? liquidity-providers tx-sender) ERR-NOT-INITIALIZED))
+      (total-lp-tokens (get pool-tokens provider-data))
+      (pool-btc (var-get pool-btc-balance))
+      (pool-stable (var-get pool-stable-balance))
+      (btc-return (/ (* lp-tokens pool-btc) total-lp-tokens))
+      (stable-return (/ (* lp-tokens pool-stable) total-lp-tokens))
+    )
+    (begin
+      (asserts! (>= total-lp-tokens lp-tokens) ERR-INSUFFICIENT-BALANCE)
+
+      ;; Update pool balances
+      (var-set pool-btc-balance (- pool-btc btc-return))
+      (var-set pool-stable-balance (- pool-stable stable-return))
+
+      ;; Update provider position
+      (map-set liquidity-providers tx-sender {
+        pool-tokens: (- total-lp-tokens lp-tokens),
+        btc-provided: (- (get btc-provided provider-data) btc-return),
+        stable-provided: (- (get stable-provided provider-data) stable-return),
+      })
+
+      ;; Transfer assets back to provider
+      (try! (transfer-balance btc-return (as-contract tx-sender) tx-sender))
+      (try! (transfer-balance stable-return (as-contract tx-sender) tx-sender))
+
+      (ok {
+        btc-returned: btc-return,
+        stable-returned: stable-return,
+      })
+    )
+  )
+)
+
+;; READ-ONLY QUERIES
+
+;; Get user vault information
+(define-read-only (get-vault-details (owner principal))
+  (map-get? collateral-vaults owner)
+)
+
+;; Calculate current collateral ratio
+(define-read-only (get-collateral-ratio (owner principal))
+  (let ((vault (unwrap! (map-get? collateral-vaults owner) ERR-NOT-INITIALIZED)))
+    (ok (calculate-collateral-ratio (get btc-locked vault)
+      (get stablecoin-minted vault)
+    ))
+  )
+)
+
+;; Get current pool state
+(define-read-only (get-pool-details)
+  {
+    btc-balance: (var-get pool-btc-balance),
+    stable-balance: (var-get pool-stable-balance),
+    total-supply: (var-get total-supply),
+    oracle-price: (var-get oracle-price),
+  }
+)
+
+;; Get liquidity provider position
+(define-read-only (get-lp-details (provider principal))
+  (map-get? liquidity-providers provider)
+)
